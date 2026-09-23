@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
+<style>html,body{margin:0;height:100%;background:#050505;overflow:hidden}*{-webkit-tap-highlight-color:transparent;box-sizing:border-box}a{color:#d8d2c4}a:hover{color:#fff}button{font:inherit}</style>
+</helmet>
+<div style="position:fixed;inset:0;background:#050505;display:flex;justify-content:center;">
+  <div ref="{{ stageRef }}" style="position:relative;width:100%;max-width:430px;height:100%;overflow:hidden;background:#070707;font-family:'Special Elite','Courier New',monospace;">
+    <canvas ref="{{ canvasRef }}" style="position:absolute;inset:0;width:100%;height:100%;display:block;"></canvas>
+    <div style="position:absolute;left:0;right:0;top:43%;transform:translateY(-50%);display:flex;justify-content:center;pointer-events:none;transition:opacity 0.8s ease;opacity:{{ textOp }};">
+      <div style="max-width:78%;text-align:center;font-size:13px;line-height:1.6;letter-spacing:0.02em;color:#0b0b0b;text-shadow:0 0 4px rgba(245,240,228,0.95),0 0 10px rgba(245,240,228,0.7);text-wrap:pretty;">{{ typed }}<span style="opacity:{{ curOp }};">_</span></div>
+    </div>
+    <div style="position:absolute;left:0;right:0;bottom:calc(44px + env(safe-area-inset-bottom));display:flex;justify-content:center;gap:10px;">
+      <sc-for list="{{ moons }}" as="m" hint-placeholder-count="6">
+        <button onClick="{{ m.onClick }}" aria-label="{{ m.label }}" style="width:44px;height:44px;padding:0;border:0;background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;transform:{{ m.tf }};opacity:{{ m.op }};transition:transform 0.9s cubic-bezier(.55,0,.8,.2) {{ m.delay }},opacity 0.9s ease {{ m.delay }};">
+          <span style="display:block;width:26px;height:26px;border-radius:50%;background:{{ m.bg }};box-shadow:{{ m.shadow }};transition:background 0.35s ease,box-shadow 0.35s ease;"></span>
+        </button>
+      </sc-for>
+    </div>
+    <canvas ref="{{ noiseRef }}" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></canvas>
+    <sc-if value="{{ isIntro }}" hint-placeholder-val="{{ true }}">
+      <button onClick="{{ start }}" style="position:absolute;inset:0;border:0;background:rgba(5,5,5,0.82);color:#d8d2c4;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;cursor:pointer;font-family:'Special Elite','Courier New',monospace;">
+        <span style="font-size:15px;letter-spacing:0.3em;">TAP TO TUNE IN<span style="opacity:{{ curOp }};">_</span></span>
+        <span style="font-size:11px;letter-spacing:0.2em;color:#8a857a;">中秋 · 2026</span>
+      </button>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { phase: 'intro', idx: [0,0,0,0,0,0], typed: '', cur: true, textOp: 1, exiting: false };
+  stageRef = React.createRef(); canvasRef = React.createRef(); noiseRef = React.createRef();
+  COLORS = ['oklch(0.62 0.21 27)','oklch(0.73 0.17 55)','oklch(0.88 0.16 98)','oklch(0.70 0.18 145)','oklch(0.60 0.16 250)','oklch(0.52 0.18 300)'];
+  TEXT = "I'll see you on The Dark Side of the Moon.";
+  flickStart = 0; darkStart = 0; timers = [];
+
+  componentDidMount() {
+    this.img = new Image();
+    this.img.onload = () => this.resize();
+    this.img.src = 'assets/moon.png';
+    this.onResize = () => this.resize();
+    window.addEventListener('resize', this.onResize);
+    this.makeNoise();
+    this.parts = Array.from({ length: 80 }, () => this.newPart(true));
+    this.resize();
+    this.curT = setInterval(() => this.setState(s => ({ cur: !s.cur })), 530);
+    const loop = (t) => { this.draw(t); this.raf = requestAnimationFrame(loop); };
+    this.raf = requestAnimationFrame(loop);
+  }
+  componentWillUnmount() {
+    cancelAnimationFrame(this.raf); clearInterval(this.curT); clearInterval(this.wowT);
+    this.timers.forEach(clearTimeout); window.removeEventListener('resize', this.onResize);
+    if (this.audio) this.audio.pause();
+  }
+  later(fn, ms) { this.timers.push(setTimeout(fn, ms)); }
+
+  newPart(init) {
+    const W = this.W || 390, H = this.H || 844;
+    return { x: Math.random() * W, y: init ? Math.random() * H : H + 5, z: 0.3 + Math.random() * 0.9,
+      vx: (Math.random() - 0.5) * 0.06, vy: -(0.02 + Math.random() * 0.08), ph: Math.random() * 6.28 };
+  }
+
+  resize() {
+    const st = this.stageRef.current, c = this.canvasRef.current, n = this.noiseRef.current;
+    if (!st || !c) return;
+    const W = st.clientWidth, H = st.clientHeight, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this.W = W; this.H = H; this.dpr = dpr;
+    c.width = W * dpr; c.height = H * dpr;
+    n.width = W; n.height = H;
+    this.D = Math.min(W * 0.84, H * 0.5); this.cx = W / 2; this.cy = H * 0.43;
+    this.buildDots();
+  }
+
+  buildDots() {
+    if (!this.img || !this.img.complete || !this.img.naturalWidth || !this.D) return;
+    const D = Math.round(this.D), o = document.createElement('canvas');
+    o.width = D; o.height = D;
+    const g = o.getContext('2d'); g.drawImage(this.img, 0, 0, D, D);
+    const data = g.getImageData(0, 0, D, D).data;
+    const s = 2.7, a = Math.PI / 4, ca = Math.cos(a), sa = Math.sin(a), R = D / 2 - 1.5;
+    const n = Math.ceil(D / s), out = [];
+    for (let i = -n; i <= n; i++) for (let j = -n; j <= n; j++) {
+      const u = i * s, v = j * s, x = u * ca - v * sa, y = u * sa + v * ca;
+      if (x * x + y * y > R * R) continue;
+      const px = Math.floor(x + D / 2), py = Math.floor(y + D / 2), k = (py * D + px) * 4;
+      const l = (data[k] * 0.299 + data[k + 1] * 0.587 + data[k + 2] * 0.114) / 255;
+      if (l < 0.04) continue;
+      out.push(x, y, Math.pow(l, 1.15));
+    }
+    this.dots = new Float32Array(out); this.spacing = s;
+  }
+
+  makeNoise() {
+    this.tiles = [];
+    for (let f = 0; f < 6; f++) {
+      const t = document.createElement('canvas'); t.width = t.height = 160;
+      const g = t.getContext('2d'), im = g.createImageData(160, 160);
+      for (let i = 0; i < im.data.length; i += 4) {
+        const v = Math.random() * 255;
+        im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 30;
+      }
+      g.putImageData(im, 0, 0); this.tiles.push(t);
+    }
+  }
+
+  flicker(t) {
+    if (!this.flickStart) return 1;
+    const e = t - this.flickStart;
+    const seq = [[0,1],[70,0.12],[130,1],[250,0.85],[300,0.04],[370,0.75],[420,0],[560,0.5],[600,0.02],[880,0.28],[920,0]];
+    let v = 1; for (const [ms, val] of seq) if (e >= ms) v = val;
+    return v;
+  }
+
+  draw(t) {
+    const c = this.canvasRef.current; if (!c || !this.W) return;
+    const ctx = c.getContext('2d'), { W, H, dpr, cx, cy, D } = this;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#070707'; ctx.fillRect(0, 0, W, H);
+
+    const dark = this.state.phase === 'dark';
+    // dust
+    for (const p of this.parts) {
+      p.x += p.vx * p.z; p.y += p.vy * p.z;
+      if (p.y < -5 || p.x < -5 || p.x > W + 5) Object.assign(p, this.newPart(false));
+      const tw = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * 0.0012 + p.ph));
+      ctx.fillStyle = `rgba(230,225,212,${0.28 * tw * p.z})`;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 0.45 + p.z * 0.55, 0, 6.283); ctx.fill();
+    }
+
+    if (!dark) {
+      const f = this.flicker(t);
+      const b = (0.84 + 0.16 * Math.sin(t * 0.00055)) * f;
+      if (b > 0.001) {
+        const glow = ctx.createRadialGradient(cx, cy, D * 0.45, cx, cy, D * 0.85);
+        glow.addColorStop(0, `rgba(236,230,214,${0.09 * b})`); glow.addColorStop(1, 'rgba(236,230,214,0)');
+        ctx.fillStyle = glow; ctx.fillRect(0, 0, W, H);
+        if (this.dots) {
+          const d = this.dots, s = this.spacing * 0.64, sw = t * 0.00035;
+          ctx.fillStyle = '#ece6d6'; ctx.beginPath();
+          for (let i = 0; i < d.length; i += 3) {
+            const x = d[i], y = d[i + 1];
+            const m = 0.9 + 0.1 * Math.sin(sw + (x - y) * 0.012);
+            const r = s * Math.sqrt(d[i + 2] * b * m);
+            if (r < 0.18) continue;
+            ctx.moveTo(cx + x + r, cy + y); ctx.arc(cx + x, cy + y, r, 0, 6.283);
+          }
+          ctx.fill();
+        }
+      }
+    } else {
+      this.drawEclipse(ctx, t);
+    }
+
+    // grain
+    const n = this.noiseRef.current;
+    if (n && (!this.lastN || t - this.lastN > 55)) {
+      this.lastN = t;
+      const g = n.getContext('2d'); g.clearRect(0, 0, n.width, n.height);
+      const tile = this.tiles[(Math.random() * 6) | 0], ox = Math.random() * 160, oy = Math.random() * 160;
+      g.save(); g.translate(-ox, -oy); g.fillStyle = g.createPattern(tile, 'repeat');
+      g.fillRect(0, 0, n.width + 160, n.height + 160); g.restore();
+    }
+  }
+
+  drawEclipse(ctx, t) {
+    const { cx, cy, D, W, H } = this, R = D / 2 * 0.86;
+    const fade = Math.min(1, (t - this.darkStart) / 3000), ease = fade * fade * (3 - 2 * fade);
+    const pulse = 0.85 + 0.15 * Math.sin(t * 0.0011);
+    ctx.globalCompositeOperation = 'lighter';
+    const base = ctx.createRadialGradient(cx, cy, R * 0.95, cx, cy, R * 2.3);
+    base.addColorStop(0, `rgba(215,225,255,${0.42 * ease * pulse})`);
+    base.addColorStop(0.25, `rgba(190,205,245,${0.12 * ease * pulse})`);
+    base.addColorStop(1, 'rgba(180,195,240,0)');
+    ctx.fillStyle = base; ctx.fillRect(0, 0, W, H);
+    for (let k = 0; k < 6; k++) {
+      const a = k * 1.047 + t * 0.00004 * (k % 2 ? 1 : -1) + Math.sin(t * 0.0003 + k) * 0.2;
+      const al = 0.1 * ease * (0.55 + 0.45 * Math.sin(t * 0.0008 + k * 1.7));
+      const x = cx + Math.cos(a) * R * 1.1, y = cy + Math.sin(a) * R * 1.1;
+      const g = ctx.createRadialGradient(x, y, 0, x, y, R * 0.95);
+      g.addColorStop(0, `rgba(220,228,255,${al})`); g.addColorStop(1, 'rgba(220,228,255,0)');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    }
+    const dp = (0.8 + 0.2 * Math.sin(t * 0.0019) + 0.04 * Math.sin(t * 0.013)) * Math.min(1, Math.max(0, (t - this.darkStart - 1200) / 1800));
+    const da = Math.PI + 0.12 + Math.sin(t * 0.0002) * 0.03, dx = cx + Math.cos(da) * R * 1.02, dy = cy + Math.sin(da) * R * 1.02;
+    const halo = ctx.createRadialGradient(dx, dy, 0, dx, dy, R * 1.5);
+    halo.addColorStop(0, `rgba(255,255,255,${0.8 * dp})`); halo.addColorStop(0.12, `rgba(235,240,255,${0.35 * dp})`);
+    halo.addColorStop(0.45, `rgba(215,225,250,${0.1 * dp})`); halo.addColorStop(1, 'rgba(210,220,250,0)');
+    ctx.fillStyle = halo; ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.save(); ctx.beginPath(); ctx.arc(cx, cy, R, 0, 6.283); ctx.clip();
+    ctx.fillStyle = '#000'; ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+    if (this.img && this.img.complete) {
+      ctx.globalAlpha = 0.16 * ease; ctx.drawImage(this.img, cx - R * 1.02, cy - R * 1.02, R * 2.04, R * 2.04); ctx.globalAlpha = 1;
+    }
+    const sh = ctx.createRadialGradient(cx + R * 0.3, cy + R * 0.3, R * 0.2, cx, cy, R);
+    sh.addColorStop(0, 'rgba(0,0,0,0.5)'); sh.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = sh; ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+    ctx.restore();
+    ctx.strokeStyle = `rgba(235,240,255,${0.18 * ease * pulse})`; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(cx, cy, R + 0.5, 0, 6.283); ctx.stroke();
+    ctx.globalCompositeOperation = 'lighter';
+    const core = ctx.createRadialGradient(dx, dy, 0, dx, dy, R * 0.07);
+    core.addColorStop(0, `rgba(255,255,255,${dp})`); core.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = core; ctx.fillRect(dx - R, dy - R, R * 2, R * 2);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  startAudio() {
+    try {
+      const a = new Audio('assets/brain-damage.mp3');
+      a.loop = true; a.preservesPitch = false; a.mozPreservesPitch = false; a.webkitPreservesPitch = false;
+      this.audio = a;
+      const AC = window.AudioContext || window.webkitAudioContext, ac = new AC(); this.ac = ac;
+      const src = ac.createMediaElementSource(a);
+      const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 320;
+      const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3100; lp.Q.value = 0.9;
+      const pk = ac.createBiquadFilter(); pk.type = 'peaking'; pk.frequency.value = 1400; pk.gain.value = 5; pk.Q.value = 0.8;
+      const ws = ac.createWaveShaper(), curve = new Float32Array(1024);
+      for (let i = 0; i < 1024; i++) { const x = i / 512 - 1; curve[i] = Math.tanh(x * 2.2) / Math.tanh(2.2); }
+      ws.curve = curve;
+      const mg = ac.createGain(); mg.gain.value = 0;
+      const cg = ac.createGain(); cg.gain.value = 0; src.connect(cg); cg.connect(ac.destination);
+      this.mg = mg; this.cg = cg;
+      src.connect(hp); hp.connect(lp); lp.connect(pk); pk.connect(ws); ws.connect(mg); mg.connect(ac.destination);
+      const len = ac.sampleRate * 3, buf = ac.createBuffer(1, len, ac.sampleRate), d = buf.getChannelData(0);
+      let pop = 0;
+      for (let i = 0; i < len; i++) {
+        if (Math.random() < 0.00025) pop = (Math.random() * 2 - 1) * 0.9;
+        d[i] = (Math.random() * 2 - 1) * 0.22 + pop; pop *= 0.82;
+      }
+      const ns = ac.createBufferSource(); ns.buffer = buf; ns.loop = true;
+      const nb = ac.createBiquadFilter(); nb.type = 'bandpass'; nb.frequency.value = 2200; nb.Q.value = 0.6;
+      const ng = ac.createGain(); ng.gain.value = 0.5;
+      ns.connect(nb); nb.connect(ng); ng.connect(ac.destination); ns.start(); this.ng = ng;
+      const now = ac.currentTime;
+      ng.gain.setValueAtTime(0.5, now); ng.gain.exponentialRampToValueAtTime(0.045, now + 1.8);
+      mg.gain.setValueAtTime(0, now); mg.gain.linearRampToValueAtTime(0.95, now + 2.2);
+      a.play().catch(() => {});
+      const t0 = performance.now();
+      this.wowT = setInterval(() => {
+        const e = (performance.now() - t0) / 1000;
+        a.playbackRate = 1 + 0.0022 * Math.sin(e * Math.PI * 1.1) + 0.0008 * Math.sin(e * 17);
+      }, 60);
+    } catch (e) { console.warn('audio', e); }
+  }
+
+  type(i) {
+    if (i > this.TEXT.length) return;
+    this.setState({ typed: this.TEXT.slice(0, i) });
+    const ch = this.TEXT[i - 1];
+    const d = ch === ' ' ? 140 : ch === '.' || ch === ',' ? 380 : 95 + Math.random() * 90;
+    this.later(() => this.type(i + 1), d);
+  }
+
+  start() {
+    if (this.state.phase !== 'intro') return;
+    this.setState({ phase: 'main' });
+    this.startAudio();
+    this.later(() => this.type(1), 1800);
+  }
+
+  tap(i) {
+    if (this.state.phase !== 'main') return;
+    const idx = this.state.idx.slice(); idx[i] = (idx[i] + 1) % 7;
+    this.setState({ idx });
+    if (idx.every((v, k) => v === k + 1)) this.solve();
+  }
+
+  solve() {
+    this.setState({ phase: 'exit' });
+    this.later(() => this.setState({ exiting: true }), 450);
+    this.later(() => this.setState({ textOp: 0 }), 1100);
+    this.later(() => { this.flickStart = performance.now(); }, 1900);
+    this.later(() => { this.darkStart = performance.now(); this.setState({ phase: 'dark' }); this.clearRadio(); }, 1900 + 2100);
+  }
+  clearRadio() {
+    if (!this.ac || !this.mg) return;
+    clearInterval(this.wowT); if (this.audio) this.audio.playbackRate = 1;
+    const now = this.ac.currentTime, T = 3;
+    [[this.mg, 0], [this.cg, 1], [this.ng, 0.0001]].forEach(([g, v]) => {
+      g.gain.cancelScheduledValues(now); g.gain.setValueAtTime(g.gain.value, now); g.gain.linearRampToValueAtTime(v, now + T);
+    });
+  }
+
+  renderVals() {
+    const { idx, exiting, typed, cur, textOp, phase } = this.state;
+    return {
+      stageRef: this.stageRef, canvasRef: this.canvasRef, noiseRef: this.noiseRef,
+      isIntro: phase === 'intro', start: () => this.start(),
+      typed, curOp: cur ? 1 : 0, textOp,
+      moons: idx.map((c, i) => ({
+        bg: c ? this.COLORS[c - 1] : '#2b2a27',
+        shadow: c ? `inset -5px -4px 0 rgba(0,0,0,0.22), 0 0 14px ${this.COLORS[c - 1]}` : 'inset -5px -4px 0 rgba(0,0,0,0.35), inset 0 0 0 1px rgba(236,230,214,0.18)',
+        tf: exiting ? 'translateY(160px)' : 'translateY(0)', op: exiting ? 0 : 1,
+        delay: exiting ? (i * 0.07).toFixed(2) + 's' : '0s',
+        label: 'moon ' + (i + 1), onClick: () => this.tap(i)
+      }))
+    };
+  }
+}
+</script>
+</body>
+</html>
